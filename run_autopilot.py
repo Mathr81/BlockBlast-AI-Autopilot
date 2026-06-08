@@ -343,7 +343,17 @@ def main():
     from adbutils import adb
     import scrcpy
     devices = adb.device_list()
-    if not devices: logging.error("[!] Pas d'appareil Android."); return
+    if not devices:
+        import subprocess
+        raw = subprocess.run(["adb", "devices"], capture_output=True, text=True).stdout
+        if "unauthorized" in raw:
+            logging.error("[!] Appareil detecte mais non autorise.")
+            logging.error("    → Deverrouillez le telephone et acceptez 'Autoriser le debogage USB'.")
+            logging.error("    → Cochez 'Toujours autoriser' puis relancez.")
+        else:
+            logging.error("[!] Pas d'appareil Android detecte.")
+            logging.error("    → Verifiez le cable USB et que le debogage USB est active.")
+        return
 
     virtual_display_id = None
     if args.virtual_display:
