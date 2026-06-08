@@ -1,10 +1,19 @@
-/__pycache__
-/blockblast
-/logs
-/best models
-high_score.txt
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Logs & runtime output
+*.log
+blockblast_autopilot_high_score.txt
+blockblast_game/high_score.txt
+
+# Calibration screenshots (generated at runtime)
+calibration/*.png
+
+# OS
 .DS_Store
-models/evaluations.npz
-/agents/trained
-*.pyc
-/agents/logs
+Thumbs.db

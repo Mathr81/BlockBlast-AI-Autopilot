@@ -1,268 +1,152 @@
-# Block Blast Game + Reinforcement Learning AI Agent
+# BlockBlast AI Autopilot
 
-Block Blast is a Tetris-inspired puzzle game played on an 8×8 grid. At each turn, the player (or agent) is presented with three randomly generated block shapes and must choose one to place anywhere on the board. Whenever an entire row or column is filled, it clears and awards points; clearing multiple lines in succession activates a combo multiplier for even higher scores.
+An AI autopilot that plays **Block Blast** autonomously on your Android phone via ADB and scrcpy. It captures the screen in real-time, detects the game grid and pieces using OpenCV, plans the best move sequence with various AI agents, and executes them via touch simulation.
 
-Under the hood, the game engine guarantees that at least one of the three available shapes can always be placed, ensuring no unwinnable states arise prematurely. A Pygame-based interface lets humans play and test strategies interactively, while a custom OpenAI Gym environment exposes the game’s state, action space, and reward function for Reinforcement Learning.
+## Features
 
-This repository implements several RL agents—including a random baseline, Deep Q-Network (DQN), Proximal Policy Optimization (PPO), and a masked-action PPO variant—to train and evaluate performance. Comprehensive scripts are provided to train agents, log metrics, visualize results, and compare different approaches under consistent conditions.
+- **Real-time screen capture** via scrcpy (30 fps)
+- **OpenCV grid & piece detection** — robust to animations, color themes, and combos
+- **5 AI agents** with different strategies (heuristic, Monte Carlo, AlphaZero hybrid, elite DFS, master tactician)
+- **Combo & MSLC tracking** — mirrors Block Blast's internal combo system
+- **Auto-revive handling** — detects and clicks through the revive screen automatically
+- **Skin detection** — resets to the default theme if an alternate skin is detected
+- **Pygame live visualization** — mirrors the game state with move preview in real-time
+- **Calibration tools** — interactive helpers to adapt coordinates to any device
 
-<p align="center">
-  <img src="blockblast_game/Assets/demo.png" alt="BlockBlast Gameplay" width="600"/>
-</p>
+## Requirements
 
----
+- Android phone with **Developer Options** and **USB Debugging** enabled
+- [scrcpy](https://github.com/Genymobile/scrcpy) installed and in PATH
+- Python 3.10+
+- USB cable or ADB over Wi-Fi
 
-## 📋 Table of Contents
+## Installation
 
-- [Features](#-features)
-- [Project Structure](#-project-structure)
-- [Requirements](#-requirements)
-- [Installation](#-installation)
-- [Usage](#-usage)
+```bash
+git clone https://github.com/Mathr81/BlockBlast-AI-Autopilot.git
+cd BlockBlast-AI-Autopilot
 
-  - [Human Play](#human-play)
-  - [Training Agents](#training-agents)
-  - [Comparing Agents](#comparing-agents)
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
 
-- [Reinforcement Learning Environment](#-reinforcement-learning-environment)
-- [Algorithms](#-algorithms)
-- [Contributing](#-contributing)
-- [Results & Analysis](#-results--analysis)
-- [Future Work](#-future-work)
-- [Credits](#-credits)
-- [License](#-license)
+pip install -r requirements.txt
+```
 
----
+## Setup & Calibration
 
-## 🚀 Features
+Before the first run, calibrate the screen coordinates for your device:
 
-- **Custom Gym Env**: Fine-tuned observation, action space, and rewards.
-- **Action Masking**: Prevents invalid moves for PPO & DQN.
-- **Multiple Agents**:
-  - Random (baseline)
-  - PPO (with/without masking)
-  - DQN
-- **Visualization**: TensorBoard logs, matplotlib plots of performance.
-- **Human Interface**: Pygame-based play via keyboard & mouse.
+```bash
+# 1. Find the exact grid and piece-slot coordinates on your screen
+python calibration/get_coords.py
 
----
+# 2. Test that the grid is correctly extracted with OpenCV
+python calibration/calibrate_opencv.py
 
-## 📂 Project Structure
+# 3. Test that drag gestures land in the right place
+python calibration/calibrate_drag.py
+```
+
+Then update **`autopilot/config.py`** with the values you found. This is the **only file you need to edit** to support a new device or screen resolution.
+
+Key parameters in `config.py`:
+
+| Parameter | Description |
+|-----------|-------------|
+| `GRID_X/Y/W/H` | Bounding box of the 8×8 grid on screen |
+| `SLOT_X_POSITIONS` | X coordinates of the 3 piece slots |
+| `DRAG_GAIN_X/Y` | Scaling factors for drag gestures |
+| `CELL_BRIGHT_THRESHOLD` | OpenCV threshold to distinguish filled vs. empty cells |
+| `BEAM_WIDTH_*` | Beam search width per game phase (zen / tactical / crisis) |
+
+## Running the Autopilot
+
+Connect your phone, open Block Blast, then run:
+
+```bash
+python run_autopilot.py
+```
+
+You will be prompted to choose an agent:
 
 ```
-BlockBlast-Game-AI-Agent/
-├── agent_comparison/      # Simulation & comparison scripts
-│   ├── simulate_playing.py
-│   └── results/           # CSVs & plots
-├── agents/                # RL agents & models
-│   ├── models/            # Saved checkpoints
-│   ├── dqn_agent.py
-│   ├── dqn_masked_agent.py
-│   ├── ppo_agent.py
-│   ├── ppo_masked_agent.py
-│   └── random_agent.py
-├── blockblast_game/       # Game environment & assets
+============================================================
+  BLOCK BLAST AUTOPILOT v8
+============================================================
+1. Agent Heuristique
+2. Agent Monte Carlo
+3. Agent Hybride AlphaZero
+4. Agent Elite DFS
+5. Agent Tacticien v8  [RECOMMANDE]
+============================================================
+```
+
+**Controls (Pygame window):**
+
+| Key | Action |
+|-----|--------|
+| `SPACE` / `P` | Pause / Resume |
+| `R` | Force a full grid re-scan |
+| Close window | Stop the autopilot |
+
+## Agents
+
+| Agent | File | Strategy |
+|-------|------|----------|
+| **Heuristique** | `agents/heuristic_agent.py` | Fast beam search + flood-fill topology analysis |
+| **Monte Carlo** | `agents/monte_carlo_agent.py` | Expectimax with sampled future piece distributions |
+| **Hybride AlphaZero** | `agents/hybrid_alphazero_agent.py` | DFS + trained MaskablePPO value critic |
+| **Elite DFS** | `agents/elite_search_agent.py` | DFS scored by connectivity and killer-shape avoidance |
+| **Tacticien v8** ⭐ | `agents/master_tactician_agent.py` | Full heuristic suite: density, hole penalty, topology, combo/MSLC-aware |
+
+> **Recommended:** Agent Tacticien v8 — combines the strongest heuristics with combo and MSLC awareness to maximize long streaks.
+
+## Project Structure
+
+```
+BlockBlast-AI-Autopilot/
+├── run_autopilot.py                    # Main entry point — autopilot loop
+├── autopilot/
+│   ├── config.py                       # ← Edit this to calibrate your device
+│   ├── vision.py                       # OpenCV screen capture & grid/piece extraction
+│   ├── planner.py                      # DFS + beam search planning engine
+│   └── control.py                      # scrcpy touch control (drag, tap, revive)
+├── agents/
+│   ├── master_tactician_agent.py       # Recommended agent
+│   ├── heuristic_agent.py
+│   ├── monte_carlo_agent.py
+│   ├── hybrid_alphazero_agent.py
+│   ├── elite_search_agent.py
+│   └── models/
+│       └── final_masked_ppo_model.zip  # Pre-trained PPO model for HybridAlphaZero
+├── blockblast_game/                    # Game engine (Pygame visualization + state logic)
 │   ├── game_env.py
 │   ├── game_renderer.py
 │   ├── game_state.py
-│   └── Assets/            # Sprites & images
-├── human_play/            # Human‐play wrapper
-│   └── human_play.py
-├── requirements.txt
-└── README.md
+│   └── Assets/
+└── calibration/
+    ├── get_coords.py                   # Interactive coordinate finder
+    ├── calibrate_opencv.py             # Test grid extraction
+    └── calibrate_drag.py              # Test drag gestures
 ```
 
----
+## Troubleshooting
 
-## ⚙️ Requirements
+**No Android device detected**
+- Make sure USB Debugging is enabled and the device is authorized (`adb devices`)
+- Try `adb kill-server && adb start-server`
 
-- Python 3.8+
-- [Pygame](https://www.pygame.org/news)
-- [Gym](https://github.com/openai/gym)
-- [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3)
-- `pip install -r requirements.txt`
+**Grid not detected / wrong coordinates**
+- Run `calibration/get_coords.py` to re-measure grid and slot coordinates
+- Adjust `CELL_BRIGHT_THRESHOLD` in `config.py` if cells are misclassified
 
----
+**Drags land in the wrong place**
+- Run `calibration/calibrate_drag.py` and adjust `DRAG_GAIN_X/Y` in `config.py`
 
-## 🔧 Installation
+**Revive screen not dismissed**
+- Adjust `REVIVE_PX1_X/Y` and `REVIVE_CLICK_X/Y` in `config.py`
 
-1. **Clone the repo**
+## License
 
-   ```bash
-   git clone https://github.com/RisticDjordje/BlockBlast-Game-AI-Agent.git
-   cd BlockBlast-Game-AI-Agent
-   ```
-
-2. **Create & activate a virtual environment**
-
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate    # macOS/Linux
-   venv\Scriptsctivate       # Windows
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## 💻 Usage
-
-**Ensure you are running all commands from the root directory of the project to avoid import errors due to sibling folder structure.**
-
-### Human Play
-
-```bash
-python -m human_play.human_play
-```
-
-- **E, R, T**: Select piece
-- **Mouse hover**: Preview placement
-- **Left-click / SPACE**: Place piece
-- **ESC**: Restart
-
----
-
-### Training Agents
-
-Make sure you’re in the project root (so `blockblast_game/` and `agents/` are on your `PYTHONPATH`) and your virtualenv is activated.
-
-## DQN
-
-- **Standard DQN**
-  ```bash
-  python -m agents.dqn_agent
-  ```
-- **Masked DQN**
-  ```bash
-  python -m agents.dqn_masked_agent
-  ```
-
-## PPO
-
-- **Standard PPO**
-  ```bash
-  python -m agents.ppo_agent
-  ```
-- **Masked PPO**
-  ```bash
-  python -m agents.ppo_masked_agent
-  ```
-
-Each script supports flags at the top of the file (e.g. `do_train`, `do_visualize`, `total_timesteps`, `continue_training`)—just edit those or wire in an `argparse` wrapper if you’d like CLI control.
-
----
-
-### Comparing Agents
-
-1. **Simulate games**
-
-   ```bash
-   python -m agent_comparison.simulate_playing
-   ```
-
-   → CSV in `agent_comparison/results/`
-
-2. **Visualize results**
-   ```bash
-   python -m agent_comparison.visualize_results
-   ```
-   → Performance plots in `agent_comparison/results/`
-
----
-
-## 🏗 Reinforcement Learning Environment
-
-- **Observation**:
-  - 8×8 grid (0/1)
-  - 3× 5×5 piece matrices
-  - Current score & combo count
-- **Action Space**: 3 shapes × 64 positions → 192 discrete actions
-- **Reward Design** (example although I have tried many different combinations):
-  - Valid placement: +0.2
-  - Invalid: –2.5 (escalating penalties)
-  - Line clear: +1.5 / line
-  - Game over: –20
-
----
-
-## 🤖 Algorithms
-
-1. **Random Agent**
-2. **PPO** (Clipped Policy Gradient)
-3. **DQN** (Value-based with Replay & Target Network)
-4. **Masked PPO** (invalid‐action masking)
-
-See inline docstrings for hyperparameters and architecture details.
-
----
-
-## 🤝 Contributing
-
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. I welcome improvements, bug fixes, new features, and documentation enhancements! Feel free to start a discussion by opening an issue if you have questions or want to propose larger changes.
-
-### How to Contribute
-
-1. **Fork the repository** to your own GitHub account.
-2. **Clone your fork** locally:
-   ```bash
-   git clone https://github.com/YourUserName/BlockBlast-Game-AI-Agent.git
-   cd BlockBlast-Game-AI-Agent
-   ```
-3. **Create a new branch** for your work with a descriptive name (feature, bugfix, etc.):
-   ```bash
-   git checkout -b feature/YourFeatureName
-   ```
-4. **Make your changes** in your branch.
-5. **Commit with clear, descriptive messages**:
-
-   - Use imperative mood (e.g., “Add”, “Fix”, “Update”).
-
-   **Commit message style examples:**
-
-   ```bash
-   feat(game): add action masking for PPO agent
-   fix(renderer): correct sprite alignment in preview mode
-   docs(readme): update contributing section with commit guidelines
-   ```
-
-6. **Push your branch** to GitHub:
-   ```bash
-   git push origin feature/YourFeatureName
-   ```
-7. **Open a Pull Request** against the `main` branch of this repository. In your PR description, include:
-   - A summary of your changes.
-   - Any related issue numbers.
-   - Screenshots or GIFs when relevant (before-and-after visuals help reviewers).
-
-We appreciate every contribution—big or small. Thank you for helping make Block Blast even better!
-
----
-
-## 📊 Results & Analysis
-
-- **DQN and PPO**: both struggle with the large action space of the game and I have not been able to get the agents to learn not to place pieces in invalid positions.
-- I have solved this by introducing action masking. Masked PPO avoids invalid moves and gains higher average rewards compared to an agent that plays randomly among the valid moves.
-
----
-
-## 🔭 Future Work
-
-- Action‐masking for DQN
-- Hyperparameter sweeps & longer training
-- Deploy a [public “BlockBlast Solver”](https://github.com/RisticDjordje/BlockBlast-Solver-Website) website with a MLOps pipeline
-
----
-
-## 🙏 Credits
-
-- **Game Assets**: [Kefrov’s Blast](https://github.com/Kefrov/Blast/)  
-  Everything else, including game logic, agent training, and analysis, is original work.
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
+MIT
