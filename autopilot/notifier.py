@@ -164,7 +164,8 @@ def notify_all_clear(turn: int, current_combo: int, frame_jpg: bytes | None = No
     _send(f"*All Clear !* (Tour {turn} | Combo={current_combo})", frame_jpg)
 
 
-def notify_periodic_stats(turn: int, max_combo: int, total_clearings: int,
+def notify_periodic_stats(turn: int, max_combo: int, current_combo: int,
+                          total_clearings: int, mslc: int,
                           elapsed_s: float, frame_jpg: bytes | None = None) -> None:
     """Stats periodiques envoyees toutes les NOTIFY_STATS_EVERY_N_TURNS tours."""
     global _last_stats_turn
@@ -175,11 +176,21 @@ def notify_periodic_stats(turn: int, max_combo: int, total_clearings: int,
         h, rem = divmod(int(elapsed_s), 3600)
         m, s   = divmod(rem, 60)
         dur    = f"{h:02d}h{m:02d}m{s:02d}s" if h else f"{m:02d}m{s:02d}s"
+        rate   = f"{total_clearings / turn:.1f}" if turn > 0 else "0.0"
         _send(
             f"*Stats — Tour {turn}* ({dur})\n"
-            f"Combo max : *{max_combo}* | Clearings : *{total_clearings}*",
+            f"Combo : *{current_combo}* | Max : *{max_combo}*\n"
+            f"Clearings : *{total_clearings}* ({rate}/tour) | MSLC : {mslc}",
             frame_jpg,
         )
+
+
+def notify_revive_detected(turn: int, frame_jpg: bytes | None = None) -> None:
+    _send(
+        f"*Revive detecte* (tour {turn})\n"
+        f"Pub en cours — reprenez avec ESPACE/P apres fermeture.",
+        frame_jpg,
+    )
 
 
 def notify_ad_detected(turn: int, frame_jpg: bytes | None = None) -> None:

@@ -49,7 +49,8 @@ from autopilot.control import (
 from blockblast_game.game_env import BlockGameEnv
 from autopilot.notifier import (
     notify_session_start, notify_game_over,
-    notify_all_clear, notify_periodic_stats, notify_ad_detected,
+    notify_all_clear, notify_periodic_stats,
+    notify_ad_detected, notify_revive_detected,
 )
 
 LOG_FILE_PATH = os.path.join(SCRIPT_DIR, LOG_FILENAME)
@@ -329,7 +330,10 @@ def main():
                 if res == "PAUSED": is_paused = True; continue
                 elif res == "REVIVED":
                     is_paused = True; env.reset(); persisted_grid = None
-                    current_combo = 0; mslc = 0; continue
+                    current_combo = 0; mslc = 0
+                    _raw = client.last_frame
+                    notify_revive_detected(turn, _encode_jpg(cv2.resize(_raw, (1084, 2412))) if _raw is not None else None)
+                    continue
 
             shapes = shape_centers = None; ok = False
 
@@ -340,6 +344,7 @@ def main():
 
                 if check_revive(screenshot):
                     logging.info("[REVIVE] Detecte !")
+                    notify_revive_detected(turn, _encode_jpg(screenshot))
                     handle_revive(client); is_paused = True; log_revive_pause()
                     env.reset(); persisted_grid = None
                     current_combo = 0; mslc = 0; break
@@ -414,6 +419,8 @@ def main():
                         if res == "REVIVED":
                             env.reset(); persisted_grid = None
                             current_combo = 0; mslc = 0
+                            _raw = client.last_frame
+                            notify_revive_detected(turn, _encode_jpg(cv2.resize(_raw, (1084, 2412))) if _raw is not None else None)
                         rev_pau = True; break
                     raw = client.last_frame
                     if raw is None: continue
@@ -431,6 +438,7 @@ def main():
                 if not planned:
                     raw = client.last_frame
                     if raw is not None and check_revive(cv2.resize(raw, (1084, 2412))):
+                        notify_revive_detected(turn, _encode_jpg(cv2.resize(raw, (1084, 2412))))
                         handle_revive(client); is_paused = True; log_revive_pause()
                         env.reset(); persisted_grid = None
                         current_combo = 0; mslc = 0; continue
@@ -477,7 +485,10 @@ def main():
                 if is_all_clear:
                     turn_had_all_clear = True
                     logging.info("  [All Clear!]")
-                    notify_all_clear(turn, current_combo, _encode_jpg(screenshot))
+                    _raw_ac = client.last_frame
+                    _ac_jpg = (_encode_jpg(cv2.resize(_raw_ac, (1084, 2412)))
+                               if _raw_ac is not None else _encode_jpg(screenshot))
+                    notify_all_clear(turn, current_combo, _ac_jpg)
 
                 shapes[shape_idx] = np.zeros((5, 5), dtype=np.int8)
                 if use_pygame:
@@ -497,7 +508,7 @@ def main():
             persisted_grid = np.array(sim_grid, dtype=np.int8)
             logging.info(f"[=] Fin tour {turn} | Combo={current_combo} | MSLC={mslc}")
 
-            notify_periodic_stats(turn, max_combo, total_clearings,
+            notify_periodic_stats(turn, max_combo, current_combo, total_clearings, mslc,
                                    time.perf_counter() - session_start, _encode_jpg(screenshot))
 
             time.sleep(DELAY_AFTER_SWIPE if DELAY_AFTER_SWIPE > 0 else 0.1)
