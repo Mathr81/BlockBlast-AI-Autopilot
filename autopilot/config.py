@@ -103,3 +103,14 @@ ANDROID_COMBO_WINDOW = 4
 # automatiquement (0 = désactiver la validation).
 # =====================================================================
 GRID_VALIDATION_MAX_MISMATCH = 8  # cellules sur 64
+
+# =====================================================================
+# AFFICHAGE VIRTUEL (option --virtual-display)
+#
+# Permet de jouer avec l'écran du téléphone éteint.
+# Nécessite Android 10+ et scrcpy-server 2.x.
+# =====================================================================
+VIRTUAL_DISPLAY_W   = 1080            # Largeur de l'affichage virtuel
+VIRTUAL_DISPLAY_H   = 2408            # Hauteur (doit correspondre au calibrage)
+VIRTUAL_DISPLAY_DPI = 420
+BLOCK_BLAST_PACKAGE = "com.block.juggle"

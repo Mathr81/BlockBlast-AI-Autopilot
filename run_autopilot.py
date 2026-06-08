@@ -16,6 +16,7 @@ Structure du projet :
 """
 import argparse
 import os
+import re
 import sys
 import time
 import cv2
@@ -36,6 +37,8 @@ from autopilot.config import (
     GRID_X, GRID_Y, GRID_W, GRID_H,
     ANDROID_COMBO_WINDOW,
     GRID_VALIDATION_MAX_MISMATCH,
+    VIRTUAL_DISPLAY_W, VIRTUAL_DISPLAY_H, VIRTUAL_DISPLAY_DPI,
+    BLOCK_BLAST_PACKAGE,
 )
 from autopilot.vision import (
     capture_and_extract, shapes_are_valid,
@@ -91,6 +94,8 @@ def parse_args():
                    help="Desactiver la fenetre Pygame")
     p.add_argument("--speed", choices=["fast", "normal", "slow"], default=None,
                    help="Preset timing : fast=animations reduites, slow=securise")
+    p.add_argument("--virtual-display", dest="virtual_display", action="store_true",
+                   help="Creer un affichage virtuel Android (ecran eteint, Android 10+)")
     return p.parse_args()
 
 
@@ -105,6 +110,71 @@ def _apply_speed(speed: str) -> None:
         DELAY_AFTER_SWIPE         = d["DELAY_AFTER_SWIPE"]
         SHORT_INTER_MOVE_DELAY    = d["SHORT_INTER_MOVE_DELAY"]
         logging.info(f"[*] Preset vitesse '{speed}' applique.")
+
+
+# ── Affichage virtuel ────────────────────────────────────────────────
+def _setup_virtual_display(device) -> int:
+    """
+    Crée un affichage virtuel Android et démarre Block Blast dessus.
+    Retourne le display_id. Nécessite Android 10+ et scrcpy-server 2.x.
+    """
+    out = device.shell(
+        f"cmd display create-virtual-display "
+        f"-w {VIRTUAL_DISPLAY_W} -h {VIRTUAL_DISPLAY_H} -d {VIRTUAL_DISPLAY_DPI}"
+    ).strip()
+    match = re.search(r"(\d+)", out)
+    if not match:
+        raise RuntimeError(
+            f"Echec création affichage virtuel.\n"
+            f"Réponse ADB : {out!r}\n"
+            f"Prérequis : Android 10+, scrcpy-server 2.x, USB Debugging activé."
+        )
+    display_id = int(match.group(1))
+    logging.info(f"[*] Affichage virtuel ID={display_id} "
+                 f"({VIRTUAL_DISPLAY_W}x{VIRTUAL_DISPLAY_H} @{VIRTUAL_DISPLAY_DPI}dpi)")
+    time.sleep(0.5)
+    device.shell(
+        f"am start --display {display_id} "
+        f"-a android.intent.action.MAIN "
+        f"-c android.intent.category.LAUNCHER "
+        f"-p {BLOCK_BLAST_PACKAGE}"
+    )
+    logging.info(f"[*] {BLOCK_BLAST_PACKAGE} lancé sur l'affichage {display_id}")
+    time.sleep(2.5)
+    return display_id
+
+
+def _make_virtual_client(device, display_id: int, **kwargs):
+    """
+    Crée un scrcpy.Client patché pour capturer un affichage virtuel spécifique.
+    Injecte display_id dans les paramètres du serveur (scrcpy-server 2.4).
+    Note : lié à l'implémentation interne de py-scrcpy-client — vérifier si la lib est mise à jour.
+    """
+    import scrcpy as _scrcpy
+    client = _scrcpy.Client(device=device, **kwargs)
+
+    _jar = "scrcpy-server.jar"
+    _jar_path = os.path.join(os.path.abspath(os.path.dirname(_scrcpy.__file__)), _jar)
+
+    def _deploy():
+        client.device.sync.push(_jar_path, f"/data/local/tmp/{_jar}")
+        cmds = [
+            f"CLASSPATH=/data/local/tmp/{_jar}",
+            "app_process", "/", "com.genymobile.scrcpy.Server", "2.4",
+            "log_level=info",
+            f"max_size={client.max_width}",
+            f"max_fps={client.max_fps}",
+            f"video_bit_rate={client.bitrate}",
+            "tunnel_forward=true", "send_frame_meta=false", "control=true",
+            "audio=false", "show_touches=false", "stay_awake=false",
+            "power_off_on_close=false", "clipboard_autosync=false",
+            f"display_id={display_id}",
+        ]
+        client._Client__server_stream = client.device.shell(cmds, stream=True)
+        client._Client__server_stream.read(10)
+
+    client._Client__deploy_server = _deploy
+    return client
 
 
 # ── Logger ───────────────────────────────────────────────────────────
@@ -274,7 +344,13 @@ def main():
     import scrcpy
     devices = adb.device_list()
     if not devices: logging.error("[!] Pas d'appareil Android."); return
-    client = scrcpy.Client(device=devices[0], max_fps=30)
+
+    virtual_display_id = None
+    if args.virtual_display:
+        virtual_display_id = _setup_virtual_display(devices[0])
+        client = _make_virtual_client(devices[0], virtual_display_id, max_fps=30)
+    else:
+        client = scrcpy.Client(device=devices[0], max_fps=30)
     client.start(threaded=True)
     retries = 30
     while client.last_frame is None and retries > 0:
@@ -283,6 +359,8 @@ def main():
         logging.error("[!] Pas de flux video."); client.stop(); return
 
     logging.info(f"[+] {client.device_name} {client.resolution} | Agent: {agent_name}")
+    if virtual_display_id is not None:
+        logging.info(f"    Affichage virtuel ID={virtual_display_id} — écran téléphone libre.")
     logging.info("  R = Re-scan | ESPACE/P = Pause\n")
     notify_session_start(agent_name)
 
@@ -529,6 +607,12 @@ def main():
         if not game_over_notified and turn > 0:
             notify_game_over(turn, max_combo, total_clearings, elapsed_total, _encode_jpg(screenshot))
         if 'client' in locals() and client: client.stop()
+        if virtual_display_id is not None and 'devices' in locals() and devices:
+            try:
+                devices[0].shell(f"cmd display destroy-virtual-display {virtual_display_id}")
+                logging.info(f"[*] Affichage virtuel {virtual_display_id} détruit.")
+            except Exception as exc:
+                logging.warning(f"[!] Échec destruction affichage virtuel : {exc}")
         env.close()
 
 
