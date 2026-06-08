@@ -1,6 +1,9 @@
 """
 run_autopilot.py — Orchestre la boucle principale de l'autopilote Block Blast.
 
+Usage :
+    python run_autopilot.py [--agent 1-5] [--no-pygame] [--speed fast|normal|slow]
+
 Structure du projet :
     run_autopilot.py        ← CE FICHIER (boucle principale, rarement modifié)
     autopilot/
@@ -11,6 +14,7 @@ Structure du projet :
     agents/
         master_tactician_agent.py  ← Agent principal (heuristiques, évaluation)
 """
+import argparse
 import os
 import sys
 import time
@@ -31,6 +35,7 @@ from autopilot.config import (
     PREVIEW_DELAY, DELAY_AFTER_SWIPE, SHORT_INTER_MOVE_DELAY,
     GRID_X, GRID_Y, GRID_W, GRID_H,
     ANDROID_COMBO_WINDOW,
+    GRID_VALIDATION_MAX_MISMATCH,
 )
 from autopilot.vision import (
     capture_and_extract, shapes_are_valid,
@@ -42,8 +47,63 @@ from autopilot.control import (
     execute_move,
 )
 from blockblast_game.game_env import BlockGameEnv
+from autopilot.notifier import (
+    notify_session_start, notify_game_over,
+    notify_all_clear, notify_periodic_stats, notify_ad_detected,
+)
 
 LOG_FILE_PATH = os.path.join(SCRIPT_DIR, LOG_FILENAME)
+
+
+def _encode_jpg(frame) -> bytes | None:
+    """Encode un frame OpenCV en JPEG bytes pour les notifications."""
+    if frame is None:
+        return None
+    try:
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        return bytes(buf) if ok else None
+    except Exception:
+        return None
+
+
+_SPEED_PRESETS = {
+    "fast": dict(
+        ANIMATION_DELAY_NORMAL=0.5, ANIMATION_DELAY_CLEARED=1.0,
+        ANIMATION_DELAY_ALL_CLEAR=2.0, DELAY_AFTER_SWIPE=0.05,
+        SHORT_INTER_MOVE_DELAY=0.02,
+    ),
+    "slow": dict(
+        ANIMATION_DELAY_NORMAL=2.0, ANIMATION_DELAY_CLEARED=3.5,
+        ANIMATION_DELAY_ALL_CLEAR=5.0, DELAY_AFTER_SWIPE=0.30,
+        SHORT_INTER_MOVE_DELAY=0.10,
+    ),
+}
+
+
+# ── CLI ──────────────────────────────────────────────────────────────
+def parse_args():
+    p = argparse.ArgumentParser(description="Block Blast Autopilot")
+    p.add_argument("--agent", type=int, choices=range(1, 6), metavar="1-5",
+                   help="Agent (1=Heuristique, 2=Monte Carlo, 3=AlphaZero, "
+                        "4=Elite DFS, 5=Tacticien [recommande])")
+    p.add_argument("--no-pygame", dest="no_pygame", action="store_true",
+                   help="Desactiver la fenetre Pygame")
+    p.add_argument("--speed", choices=["fast", "normal", "slow"], default=None,
+                   help="Preset timing : fast=animations reduites, slow=securise")
+    return p.parse_args()
+
+
+def _apply_speed(speed: str) -> None:
+    global ANIMATION_DELAY_NORMAL, ANIMATION_DELAY_CLEARED, ANIMATION_DELAY_ALL_CLEAR
+    global DELAY_AFTER_SWIPE, SHORT_INTER_MOVE_DELAY
+    if speed in _SPEED_PRESETS:
+        d = _SPEED_PRESETS[speed]
+        ANIMATION_DELAY_NORMAL    = d["ANIMATION_DELAY_NORMAL"]
+        ANIMATION_DELAY_CLEARED   = d["ANIMATION_DELAY_CLEARED"]
+        ANIMATION_DELAY_ALL_CLEAR = d["ANIMATION_DELAY_ALL_CLEAR"]
+        DELAY_AFTER_SWIPE         = d["DELAY_AFTER_SWIPE"]
+        SHORT_INTER_MOVE_DELAY    = d["SHORT_INTER_MOVE_DELAY"]
+        logging.info(f"[*] Preset vitesse '{speed}' applique.")
 
 
 # ── Logger ───────────────────────────────────────────────────────────
@@ -95,7 +155,7 @@ def update_title(agent_name, paused, combo, mslc):
 
 
 # ── Sélection agent ──────────────────────────────────────────────────
-def select_agent():
+def select_agent(agent_id: int | None = None):
     os.system('cls' if os.name == 'nt' else 'clear')
     print("=" * 60)
     print("  BLOCK BLAST AUTOPILOT v8")
@@ -107,25 +167,40 @@ def select_agent():
     print("5. Agent Tacticien v8  [RECOMMANDE]")
     print("=" * 60)
     ppo = os.path.join(SCRIPT_DIR, "agents", "models", "final_masked_ppo_model.zip")
-    while True:
-        c = input("\nVotre choix (1-5) : ").strip()
-        if c == '1':
+
+    def _load(c):
+        if c == 1:
             from agents.heuristic_agent import HeuristicSearchAgent
             return HeuristicSearchAgent(), "Heuristique"
-        elif c == '2':
+        if c == 2:
             from agents.monte_carlo_agent import MonteCarloExpectimaxAgent
             return MonteCarloExpectimaxAgent(sample_size=12), "Monte Carlo"
-        elif c == '3':
+        if c == 3:
             from agents.hybrid_alphazero_agent import HybridAlphaZeroAgent
             return HybridAlphaZeroAgent(model_path=ppo, sample_size=12), "Hybride AlphaZero"
-        elif c == '4':
+        if c == 4:
             from agents.elite_search_agent import EliteSearchAgent
             return EliteSearchAgent(), "Elite DFS"
-        elif c == '5':
+        if c == 5:
             from agents.master_tactician_agent import MasterTacticianAgent
-            return MasterTacticianAgent(sample_size=16), "Tacticien Personnalisé"
-        else:
-            print("Choix invalide.")
+            return MasterTacticianAgent(sample_size=16), "Tacticien Personnalise"
+        return None
+
+    if agent_id is not None:
+        result = _load(agent_id)
+        if result:
+            print(f"Agent selectionne via CLI : {result[1]}")
+            return result
+
+    while True:
+        c = input("\nVotre choix (1-5) : ").strip()
+        try:
+            result = _load(int(c))
+            if result:
+                return result
+        except (ValueError, TypeError):
+            pass
+        print("Choix invalide.")
 
 
 # ── Utilitaires ──────────────────────────────────────────────────────
@@ -162,15 +237,16 @@ def log_revive_pause():
     logging.info("[PAUSE] PUB REVIVE. Fermez-la puis ESPACE/P.")
     logging.info("="*80 + "\n")
 
-def smart_sleep(client, delay, agent_name):
+def smart_sleep(client, delay, agent_name, use_pygame=True):
     """Attend en surveillant Revive et les touches Pygame."""
     start = time.perf_counter()
     while time.perf_counter() - start < delay:
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT: raise KeyboardInterrupt
-            if ev.type == pygame.KEYDOWN:
-                if ev.key in (pygame.K_p, pygame.K_SPACE) or ev.unicode.lower() == 'p':
-                    return "PAUSED"
+        if use_pygame:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT: raise KeyboardInterrupt
+                if ev.type == pygame.KEYDOWN:
+                    if ev.key in (pygame.K_p, pygame.K_SPACE) or ev.unicode.lower() == 'p':
+                        return "PAUSED"
         raw = client.last_frame
         if raw is not None:
             sc = cv2.resize(raw, (1084, 2412))
@@ -183,8 +259,14 @@ def smart_sleep(client, delay, agent_name):
 
 # ── MAIN ─────────────────────────────────────────────────────────────
 def main():
+    args = parse_args()
     setup_logger()
-    agent, agent_name = select_agent()
+
+    if args.speed:
+        _apply_speed(args.speed)
+
+    agent, agent_name = select_agent(args.agent)
+    use_pygame = not args.no_pygame
 
     logging.info("[*] Connexion ADB / Scrcpy...")
     from adbutils import adb
@@ -201,27 +283,38 @@ def main():
 
     logging.info(f"[+] {client.device_name} {client.resolution} | Agent: {agent_name}")
     logging.info("  R = Re-scan | ESPACE/P = Pause\n")
+    notify_session_start(agent_name)
 
-    env = BlockGameEnv(render_mode="human")
+    if use_pygame:
+        env = BlockGameEnv(render_mode="human")
+    else:
+        env = BlockGameEnv(render_mode=None)
     env.reset(); time.sleep(1.0)
 
+    session_start = time.perf_counter()
     turn = 0; persisted_grid = None; manual_rescan = False; is_paused = False
     last_had_clears = False; last_had_all_clear = False
     current_combo = 0  # cumul de LIGNES effacees consecutivement (+=cleared par piece)
     mslc = 0           # blocs poses sans effacer, transmis entre tours
+    max_combo = 0; total_clearings = 0
+    consecutive_detection_failures = 0
+    game_over_notified = False
+    screenshot = None
 
     try:
         while True:
-            for ev in pygame.event.get():
-                if ev.type == pygame.QUIT: raise KeyboardInterrupt
-                if ev.type == pygame.KEYDOWN:
-                    if ev.key == pygame.K_r or ev.unicode.lower() == 'r':
-                        manual_rescan = True; logging.info("[!] Re-scan force.")
-                    if ev.key in (pygame.K_p, pygame.K_SPACE) or ev.unicode.lower() == 'p':
-                        is_paused = not is_paused
-                        logging.info("[PAUSE]" if is_paused else "[REPRISE]")
+            if use_pygame:
+                for ev in pygame.event.get():
+                    if ev.type == pygame.QUIT: raise KeyboardInterrupt
+                    if ev.type == pygame.KEYDOWN:
+                        if ev.key == pygame.K_r or ev.unicode.lower() == 'r':
+                            manual_rescan = True; logging.info("[!] Re-scan force.")
+                        if ev.key in (pygame.K_p, pygame.K_SPACE) or ev.unicode.lower() == 'p':
+                            is_paused = not is_paused
+                            logging.info("[PAUSE]" if is_paused else "[REPRISE]")
 
-            update_title(agent_name, is_paused, current_combo, mslc)
+            if use_pygame:
+                update_title(agent_name, is_paused, current_combo, mslc)
             if is_paused: time.sleep(0.1); continue
 
             should_scan = (persisted_grid is None or manual_rescan or
@@ -232,13 +325,13 @@ def main():
                 delay = (ANIMATION_DELAY_ALL_CLEAR if last_had_all_clear
                          else ANIMATION_DELAY_CLEARED if last_had_clears
                          else ANIMATION_DELAY_NORMAL)
-                res = smart_sleep(client, delay, agent_name)
+                res = smart_sleep(client, delay, agent_name, use_pygame)
                 if res == "PAUSED": is_paused = True; continue
                 elif res == "REVIVED":
                     is_paused = True; env.reset(); persisted_grid = None
                     current_combo = 0; mslc = 0; continue
 
-            screenshot = shapes = shape_centers = None; ok = False
+            shapes = shape_centers = None; ok = False
 
             for _ in range(MAX_DETECTION_RETRIES):
                 raw = client.last_frame
@@ -264,11 +357,35 @@ def main():
                 ok = True; break
 
             if is_paused: continue
-            if not ok: logging.info("[*] Attente distribution valide..."); time.sleep(0.5); continue
+            if not ok:
+                consecutive_detection_failures += 1
+                if consecutive_detection_failures >= 2:
+                    logging.warning("[!] Pub/interstitiel probable — action manuelle requise.")
+                    notify_ad_detected(turn, _encode_jpg(screenshot))
+                    consecutive_detection_failures = 0
+                logging.info("[*] Attente distribution valide..."); time.sleep(0.5); continue
+            consecutive_detection_failures = 0
 
             if should_scan:
                 grid_crop = screenshot[GRID_Y:GRID_Y+GRID_H, GRID_X:GRID_X+GRID_W]
                 grid = extract_grid(grid_crop)
+                # ── Validation de cohérence grille ────────────────────────────
+                if GRID_VALIDATION_MAX_MISMATCH > 0 and persisted_grid is not None:
+                    mm = int(np.sum(np.abs(persisted_grid.astype(int) - grid.astype(int))))
+                    if mm > GRID_VALIDATION_MAX_MISMATCH:
+                        logging.warning(f"[VISION] Drift {mm}/64 cellules — re-capture...")
+                        time.sleep(0.25)
+                        raw2 = client.last_frame
+                        if raw2 is not None:
+                            sc2   = cv2.resize(raw2, (1084, 2412))
+                            grid2 = extract_grid(sc2[GRID_Y:GRID_Y+GRID_H, GRID_X:GRID_X+GRID_W])
+                            mm2   = int(np.sum(np.abs(persisted_grid.astype(int) - grid2.astype(int))))
+                            if mm2 < mm:
+                                grid = grid2
+                                logging.info(f"[VISION] Re-capture ok: drift {mm}→{mm2}.")
+                            else:
+                                logging.warning(f"[VISION] Drift persistant ({mm2}) — grille camera acceptee.")
+                # ─────────────────────────────────────────────────────────────
                 persisted_grid = grid; manual_rescan = False
                 logging.info("[*] Grille synchronisee.")
             else:
@@ -276,7 +393,8 @@ def main():
 
             turn += 1
             log_state(turn, grid, shapes, current_combo, mslc)
-            sync_virtual_env_state(env, grid, shapes); env.render()
+            if use_pygame:
+                sync_virtual_env_state(env, grid, shapes); env.render()
 
             t0 = time.perf_counter()
             planned = plan_entire_turn_sequence(
@@ -290,7 +408,7 @@ def main():
                 logging.warning("[!] Aucun coup — recuperation...")
                 rev_pau = False
                 for _ in range(3):
-                    res = smart_sleep(client, 1.2, agent_name)
+                    res = smart_sleep(client, 1.2, agent_name, use_pygame)
                     if res in ("REVIVED", "PAUSED"):
                         is_paused = True
                         if res == "REVIVED":
@@ -319,16 +437,21 @@ def main():
                     active = [(i, get_trimmed_shape_form(s))
                               for i, s in enumerate(shapes) if np.any(s)]
                     log_defeat(grid, shapes, active)
-                    logging.error("[-] Defaite."); break
+                    logging.error("[-] Defaite.")
+                    notify_game_over(turn, max_combo, total_clearings,
+                                     time.perf_counter() - session_start, _encode_jpg(screenshot))
+                    game_over_notified = True
+                    break
 
             sim_grid = [row[:] for row in grid]
             turn_had_clears = False; turn_had_all_clear = False
             mslc_sim = mslc
 
             for step, (shape_idx, row, col, form) in enumerate(planned):
-                sync_virtual_env_state(env, sim_grid, shapes,
-                                       preview_data=(form, row, col, shape_idx))
-                env.render()
+                if use_pygame:
+                    sync_virtual_env_state(env, sim_grid, shapes,
+                                           preview_data=(form, row, col, shape_idx))
+                    env.render()
                 if PREVIEW_DELAY > 0: time.sleep(PREVIEW_DELAY)
 
                 logging.info(f"  -> {step+1}/{len(planned)}: "
@@ -340,7 +463,10 @@ def main():
                 mslc_sim += 1
                 if cleared > 0:
                     mslc_sim = 0; turn_had_clears = True
-                    current_combo += cleared   # += lignes effacees (pas += 1)
+                    current_combo += cleared
+                    total_clearings += cleared
+                    if current_combo > max_combo:
+                        max_combo = current_combo
                     logging.info(f"  [OK] {cleared} ligne(s) -> Combo={current_combo}")
                 else:
                     if mslc_sim >= ANDROID_COMBO_WINDOW and current_combo > 0:
@@ -348,10 +474,14 @@ def main():
                         current_combo = 0
 
                 is_all_clear = all(cell == 0 for r in sim_grid for cell in r)
-                if is_all_clear: turn_had_all_clear = True; logging.info("  [All Clear!]")
+                if is_all_clear:
+                    turn_had_all_clear = True
+                    logging.info("  [All Clear!]")
+                    notify_all_clear(turn, current_combo, _encode_jpg(screenshot))
 
                 shapes[shape_idx] = np.zeros((5, 5), dtype=np.int8)
-                sync_virtual_env_state(env, sim_grid, shapes); env.render()
+                if use_pygame:
+                    sync_virtual_env_state(env, sim_grid, shapes); env.render()
 
                 if step < len(planned) - 1:
                     if is_all_clear:  time.sleep(ANIMATION_DELAY_ALL_CLEAR)
@@ -366,11 +496,27 @@ def main():
             last_had_clears = turn_had_clears; last_had_all_clear = turn_had_all_clear
             persisted_grid = np.array(sim_grid, dtype=np.int8)
             logging.info(f"[=] Fin tour {turn} | Combo={current_combo} | MSLC={mslc}")
+
+            notify_periodic_stats(turn, max_combo, total_clearings,
+                                   time.perf_counter() - session_start, _encode_jpg(screenshot))
+
             time.sleep(DELAY_AFTER_SWIPE if DELAY_AFTER_SWIPE > 0 else 0.1)
 
     except KeyboardInterrupt:
         logging.info("\n[-] Arrete.")
     finally:
+        elapsed_total = time.perf_counter() - session_start
+        h, rem = divmod(int(elapsed_total), 3600)
+        m, s   = divmod(rem, 60)
+        logging.info("\n" + "=" * 60)
+        logging.info("  STATS DE SESSION")
+        logging.info(f"  Duree     : {h:02d}h{m:02d}m{s:02d}s")
+        logging.info(f"  Tours     : {turn}")
+        logging.info(f"  Combo max : {max_combo}")
+        logging.info(f"  Clearings : {total_clearings}")
+        logging.info("=" * 60)
+        if not game_over_notified and turn > 0:
+            notify_game_over(turn, max_combo, total_clearings, elapsed_total, _encode_jpg(screenshot))
         if 'client' in locals() and client: client.stop()
         env.close()
 

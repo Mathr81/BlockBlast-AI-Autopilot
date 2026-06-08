@@ -93,3 +93,13 @@ BEAM_WIDTH_CRISIS   = 22
 #   → fenêtre Android = 4 blocs avant bris du combo
 # =====================================================================
 ANDROID_COMBO_WINDOW = 4
+
+# =====================================================================
+# VALIDATION DE GRILLE
+#
+# Après chaque re-scan OpenCV, compare la grille extraite avec
+# l'état simulé du tour précédent.
+# Si l'écart dépasse ce seuil, une re-capture est effectuée
+# automatiquement (0 = désactiver la validation).
+# =====================================================================
+GRID_VALIDATION_MAX_MISMATCH = 8  # cellules sur 64
